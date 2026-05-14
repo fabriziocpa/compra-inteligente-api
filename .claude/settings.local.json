@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"C:/Users/Usuario/Documents/Code/Universidad/202601/Finanzas/compra-inteligente-api\")",
+      "Bash(uv *)",
+      "PowerShell(New-Item *)"
+    ]
+  }
+}
