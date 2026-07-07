@@ -4,6 +4,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,5 +26,7 @@ class ScheduleEntryORM(BaseORM):
     payment: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     amortization: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     final_balance: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    # Cargos del período: [{name, kind, amount}] con montos negativos (egresos).
+    charges: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
     loan: Mapped[LoanORM] = relationship(back_populates="schedule_entries")

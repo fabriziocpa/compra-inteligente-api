@@ -1,3 +1,5 @@
+"""Esquemas (contratos HTTP) del contexto de clientes."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -14,6 +16,10 @@ class ClientCreate(BaseModel):
 
 
 class ClientUpdate(BaseModel):
+    """Edición parcial: cualquier dato registrado puede corregirse."""
+
+    full_name: str | None = Field(default=None, min_length=1, max_length=255)
+    document_id: str | None = Field(default=None, min_length=1, max_length=50)
     email: EmailStr | None = None
     phone: str | None = Field(default=None, max_length=50)
 

@@ -51,8 +51,32 @@ class Vehicle(AggregateRoot):
             currency=currency,
         )
 
-    def update_price(self, list_price: Decimal) -> None:
-        if list_price <= Decimal(0):
-            raise DomainError("list_price must be positive")
-        self.list_price = list_price
+    def update_data(
+        self,
+        *,
+        brand: str | None = None,
+        model: str | None = None,
+        year: int | None = None,
+        list_price: Decimal | None = None,
+        currency: Currency | None = None,
+    ) -> None:
+        """Edición parcial de los datos registrados (requisito 3 del enunciado)."""
+        if brand is not None:
+            if not brand.strip():
+                raise DomainError("brand required")
+            self.brand = brand.strip()
+        if model is not None:
+            if not model.strip():
+                raise DomainError("model required")
+            self.model = model.strip()
+        if year is not None:
+            if year < 1900:
+                raise DomainError("year too small")
+            self.year = year
+        if list_price is not None:
+            if list_price <= Decimal(0):
+                raise DomainError("list_price must be positive")
+            self.list_price = list_price
+        if currency is not None:
+            self.currency = currency
         self.touch()

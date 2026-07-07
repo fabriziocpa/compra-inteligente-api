@@ -1,3 +1,13 @@
+"""Caso de uso: indicadores financieros (VAN, TIR, TCEA) del préstamo.
+
+El flujo de caja se arma desde el punto de vista del deudor con el cronograma
+YA calculado (incluidos sus cargos por período), de modo que los indicadores
+siempre coinciden con el plan que se le muestra al cliente:
+
+* t = 0: desembolso neto recibido, MF = precio − cuota inicial (positivo).
+* t = 1..n: cuota total del período (cuota del plan + cargos), negativa.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -28,23 +38,13 @@ class CalculateIndicatorsUseCase:
         if not loan.schedule:
             raise DomainError("Loan has no schedule. Run /schedule first.")
 
-        # t=0: net disbursement received by the debtor.
-        # Under Compra Inteligente / Francés the debtor receives MF = price - CI.
-        # (Initial charges could subtract from this; current charge model is per-period.)
         disbursement = loan.terms.vehicle_price * (
             Decimal(1) - loan.terms.initial_payment_pct
         )
 
+        # total_payment ya incluye los cargos del período (con signo negativo).
         cashflows: list[Decimal] = [disbursement]
-        for entry in loan.schedule:
-            outflow = entry.payment  # negative
-            for charge in loan.additional_charges:
-                outflow -= charge.amount_for(
-                    period=entry.period,
-                    initial_balance=entry.initial_balance,
-                    payment=entry.payment,
-                )
-            cashflows.append(outflow)
+        cashflows.extend(entry.total_payment for entry in loan.schedule)
 
         tir = FinancialIndicatorsService.tir(cashflows)
         tcea = FinancialIndicatorsService.tcea(tir, loan.terms.frequency_days)

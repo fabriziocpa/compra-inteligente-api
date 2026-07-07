@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.contexts.audit.infrastructure.orm_operation import registrar_operacion
 from src.contexts.auth.interfaces.dependencies import CurrentUser
 from src.contexts.vehicles.domain.vehicle import Vehicle
 from src.contexts.vehicles.infrastructure.sqlalchemy_vehicle_repository import (
@@ -63,6 +64,14 @@ async def create_vehicle(
         currency=Currency(body.currency),
     )
     await repo.add(vehicle)
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="vehicle.created",
+        entity_type="vehicle",
+        entity_id=vehicle.id,
+        detail={"brand": vehicle.brand, "model": vehicle.model},
+    )
     await session.commit()
     return _to_response(vehicle)
 
@@ -84,9 +93,22 @@ async def update_vehicle(
     repo = SqlAlchemyVehicleRepository(session)
     v = await repo.get(vehicle_id)
     _ensure_owner(v, user.id)
-    if body.list_price is not None:
-        v.update_price(body.list_price)
+    v.update_data(
+        brand=body.brand,
+        model=body.model,
+        year=body.year,
+        list_price=body.list_price,
+        currency=Currency(body.currency) if body.currency is not None else None,
+    )
     await repo.update(v)
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="vehicle.updated",
+        entity_type="vehicle",
+        entity_id=v.id,
+        detail={"fields": sorted(body.model_dump(exclude_unset=True).keys())},
+    )
     await session.commit()
     return _to_response(v)
 
@@ -99,4 +121,11 @@ async def delete_vehicle(
     v = await repo.get(vehicle_id)
     _ensure_owner(v, user.id)
     await repo.delete(vehicle_id)
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="vehicle.deleted",
+        entity_type="vehicle",
+        entity_id=vehicle_id,
+    )
     await session.commit()

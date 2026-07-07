@@ -1,12 +1,30 @@
-"""VAN, TIR and TCEA computed from the debtor's perspective.
+"""VAN, TIR y TCEA calculados desde el punto de vista del DEUDOR.
 
-Cashflow sign convention:
-    * ``cashflows[0]`` is the *net disbursement received* by the debtor (positive).
-    * ``cashflows[t>0]`` is the *negative* total outflow of period t (payment plus
-      additional charges).
+Procedimiento
+=============
+El flujo de caja del deudor se arma así:
 
-``TIR`` is solved with ``scipy.optimize.brentq`` after bracketing.  ``float`` is
-only used inside the optimiser; the result is cast back to ``Decimal``.
+* ``cashflows[0]``: el desembolso neto RECIBIDO (positivo) = MF = precio − CI.
+* ``cashflows[t>0]``: el egreso total del período (negativo) = cuota del plan
+  más cargos adicionales (seguros, comisiones, portes).
+
+Indicadores:
+
+* **VAN** (valor actual neto) a una tasa de descuento del período ``i``::
+
+      VAN = Σ  FC_t / (1+i)^t
+
+  Si VAN > 0 a la tasa de oportunidad del deudor, la financiación le conviene.
+
+* **TIR** del período: la tasa que hace VAN = 0. Se resuelve numéricamente con
+  ``scipy.optimize.brentq`` tras acotar un cambio de signo; solo el interior
+  del optimizador usa ``float``, el resultado vuelve a ``Decimal``. Sin cargos
+  adicionales, la TIR del período coincide con la TEP del préstamo.
+
+* **TCEA** (tasa de costo efectivo anual, norma de transparencia SBS): la TIR
+  del período anualizada con el año bancario de 360 días::
+
+      TCEA = (1 + TIR)^(360/d) − 1
 """
 
 from __future__ import annotations
@@ -22,6 +40,7 @@ from src.shared.domain.exceptions import ConvergenceError, DomainError
 class FinancialIndicatorsService:
     @staticmethod
     def van(cashflows: list[Decimal], discount_rate_per_period: Decimal) -> Decimal:
+        """VAN = Σ FC_t / (1+i)^t con ``i`` = tasa de descuento del período."""
         if not cashflows:
             raise DomainError("cashflows must not be empty")
         i = discount_rate_per_period
@@ -35,6 +54,7 @@ class FinancialIndicatorsService:
 
     @staticmethod
     def tir(cashflows: list[Decimal], guess: Decimal = Decimal("0.01")) -> Decimal:
+        """TIR del período: raíz de VAN(i) = 0, resuelta con Brent."""
         if len(cashflows) < 2:
             raise DomainError("cashflows must contain at least two entries")
         flows = [float(cf) for cf in cashflows]
@@ -48,11 +68,11 @@ class FinancialIndicatorsService:
                 denom *= one_plus
             return total
 
-        # Bracket the root.  Start from the guess and expand outward.
+        # Acotar la raíz: se parte de un intervalo amplio y, si el signo no
+        # cambia, se prueban cotas intermedias.
         lo, hi = -0.9999, 10.0
         try:
             if npv(lo) * npv(hi) > 0:
-                # Sign doesn't change in the default bracket — try a tighter search.
                 found = False
                 for candidate in (-0.5, -0.1, 0.0, 0.05, 0.1, 0.5, 1.0, 5.0):
                     if npv(lo) * npv(candidate) < 0:
@@ -74,6 +94,7 @@ class FinancialIndicatorsService:
         days_in_period: int,
         days_in_year: int = 360,
     ) -> Decimal:
+        """TCEA = (1 + TIR del período)^(360/d) − 1 (año bancario)."""
         if days_in_period <= 0:
             raise DomainError("days_in_period must be positive")
         exponent = Decimal(days_in_year) / Decimal(days_in_period)

@@ -1,3 +1,10 @@
+"""Términos económicos del préstamo (objeto de valor inmutable).
+
+``initial_payment_pct`` y ``balloon_pct`` son fracciones (0.20 = 20 %).
+Si hay cuota balón (%final > 0), el plan es de la modalidad Compra
+Inteligente; si no, es un francés puro sobre precio − cuota inicial.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

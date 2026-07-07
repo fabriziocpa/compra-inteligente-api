@@ -10,6 +10,7 @@ from sqlalchemy.pool import NullPool
 from src.config import settings
 
 # Ensure every ORM module is imported so its tables are registered.
+from src.contexts.audit.infrastructure import orm_operation  # noqa: F401
 from src.contexts.auth.infrastructure import orm_user  # noqa: F401
 from src.contexts.clients.infrastructure import orm_client  # noqa: F401
 from src.contexts.loans.infrastructure import orm_loan, orm_schedule_entry  # noqa: F401

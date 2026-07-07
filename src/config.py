@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = Field(
         default="postgresql+asyncpg://user:pass@localhost:5432/compra_inteligente"
     )
-    JWT_SECRET_KEY: str = Field(default="change-me-in-production-please-32-bytes-min")
+    JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = Field(default="HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7)
