@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.contexts.audit.infrastructure.orm_operation import registrar_operacion
 from src.contexts.auth.interfaces.dependencies import CurrentUser
 from src.contexts.clients.domain.client import Client
 from src.contexts.clients.infrastructure.sqlalchemy_client_repository import (
@@ -60,6 +61,14 @@ async def create_client(
         phone=body.phone,
     )
     await repo.add(client)
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="client.created",
+        entity_type="client",
+        entity_id=client.id,
+        detail={"full_name": client.full_name},
+    )
     await session.commit()
     return _to_response(client)
 
@@ -81,8 +90,21 @@ async def update_client(
     repo = SqlAlchemyClientRepository(session)
     client = await repo.get(client_id)
     _ensure_owner(client, user.id)
-    client.update_contact(email=body.email, phone=body.phone)
+    client.update_data(
+        full_name=body.full_name,
+        document_id=body.document_id,
+        email=body.email,
+        phone=body.phone,
+    )
     await repo.update(client)
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="client.updated",
+        entity_type="client",
+        entity_id=client.id,
+        detail={"fields": sorted(body.model_dump(exclude_unset=True).keys())},
+    )
     await session.commit()
     return _to_response(client)
 
@@ -95,4 +117,11 @@ async def delete_client(
     client = await repo.get(client_id)
     _ensure_owner(client, user.id)
     await repo.delete(client_id)
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="client.deleted",
+        entity_type="client",
+        entity_id=client_id,
+    )
     await session.commit()

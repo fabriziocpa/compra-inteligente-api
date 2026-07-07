@@ -10,7 +10,7 @@ from src.shared.domain.exceptions import DomainError
 
 @dataclass(eq=False)
 class Client(AggregateRoot):
-    owner_id: UUID = uuid4()  # default placeholder; always set on create
+    owner_id: UUID = uuid4()  # placeholder; siempre se asigna en create()
     full_name: str = ""
     document_id: str = ""  # DNI / RUC
     email: str = ""
@@ -44,7 +44,23 @@ class Client(AggregateRoot):
             phone=phone,
         )
 
-    def update_contact(self, *, email: str | None = None, phone: str | None = None) -> None:
+    def update_data(
+        self,
+        *,
+        full_name: str | None = None,
+        document_id: str | None = None,
+        email: str | None = None,
+        phone: str | None = None,
+    ) -> None:
+        """Edición parcial de los datos registrados (requisito 3 del enunciado)."""
+        if full_name is not None:
+            if not full_name.strip():
+                raise DomainError("full_name required")
+            self.full_name = full_name.strip()
+        if document_id is not None:
+            if not document_id.strip():
+                raise DomainError("document_id required")
+            self.document_id = document_id.strip()
         if email is not None:
             if "@" not in email:
                 raise DomainError("invalid email")

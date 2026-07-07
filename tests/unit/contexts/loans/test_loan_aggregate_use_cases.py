@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from src.contexts.loans.application.commands.create_loan_command import (
+    AdditionalChargeInput,
     CreateLoanCommand,
     RateSegmentInput,
 )
@@ -116,3 +117,41 @@ async def test_compra_inteligente_with_balloon_and_initial_payment() -> None:
     result = await CalculateIndicatorsUseCase(repo).execute(loan.id)
     assert result.tir_per_period > Decimal(0)
     assert result.tcea > Decimal(0)
+
+
+@pytest.mark.asyncio
+async def test_charges_are_stored_per_period_and_enter_indicators() -> None:
+    """Los cargos deben quedar en cada fila (cuota total) y subir la TCEA."""
+    repo = InMemoryLoanRepo()
+
+    cmd = _base_cmd()
+    loan_sin_cargos = await CreateLoanUseCase(repo).execute(cmd)
+    loan_sin_cargos = await CalculateScheduleUseCase(repo).execute(loan_sin_cargos.id)
+    base = await CalculateIndicatorsUseCase(repo).execute(loan_sin_cargos.id)
+
+    cmd2 = _base_cmd()
+    object.__setattr__(
+        cmd2,
+        "additional_charges",
+        [
+            AdditionalChargeInput(
+                name="Seguro desgravamen",
+                kind="seguro",
+                basis="balance_pct",
+                value=Decimal("0.001"),
+            )
+        ],
+    )
+    loan = await CreateLoanUseCase(repo).execute(cmd2)
+    loan = await CalculateScheduleUseCase(repo).execute(loan.id)
+
+    first = loan.schedule[0]
+    assert len(first.charges) == 1
+    # 0.1 % del saldo inicial, con signo negativo (egreso del deudor).
+    esperado = -(first.initial_balance * Decimal("0.001"))
+    assert abs(first.charges[0].amount - esperado) <= Decimal("0.01")
+    assert first.total_payment == first.payment + first.charges_total
+
+    con_cargos = await CalculateIndicatorsUseCase(repo).execute(loan.id)
+    # El costo efectivo (TCEA) debe subir al incluir el seguro.
+    assert con_cargos.tcea > base.tcea

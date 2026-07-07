@@ -4,7 +4,10 @@ from decimal import Decimal
 from typing import Any, cast
 
 from src.contexts.loans.domain.entities.loan import Loan, LoanStatus
-from src.contexts.loans.domain.entities.payment_schedule_entry import PaymentScheduleEntry
+from src.contexts.loans.domain.entities.payment_schedule_entry import (
+    ChargeAmount,
+    PaymentScheduleEntry,
+)
 from src.contexts.loans.domain.value_objects.additional_charge import (
     AdditionalCharge,
     ChargeBasis,
@@ -121,6 +124,10 @@ def loan_to_orm(loan: Loan, orm: LoanORM | None = None) -> LoanORM:
             payment=e.payment,
             amortization=e.amortization,
             final_balance=e.final_balance,
+            charges=[
+                {"name": c.name, "kind": c.kind, "amount": str(c.amount)}
+                for c in e.charges
+            ],
         )
         for e in loan.schedule
     ]
@@ -145,6 +152,12 @@ def loan_from_orm(orm: LoanORM) -> Loan:
             payment=e.payment,
             amortization=e.amortization,
             final_balance=e.final_balance,
+            charges=tuple(
+                ChargeAmount(
+                    name=c["name"], kind=c["kind"], amount=Decimal(c["amount"])
+                )
+                for c in (e.charges or [])
+            ),
         )
         for e in sorted(orm.schedule_entries, key=lambda e: e.period)
     )

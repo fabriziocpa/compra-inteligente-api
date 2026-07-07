@@ -9,7 +9,7 @@ from uuid import UUID
 class RateSegmentInput:
     from_period: int
     to_period: int
-    rate_kind: str  # "TEA" or "TNA"
+    rate_kind: str  # "TEA" o "TNA"
     rate_value: Decimal
     capitalizations_per_year: int | None = None
 

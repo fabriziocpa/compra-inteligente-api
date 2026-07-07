@@ -3,7 +3,12 @@
     "allow": [
       "Bash(dir \"C:/Users/Usuario/Documents/Code/Universidad/202601/Finanzas/compra-inteligente-api\")",
       "Bash(uv *)",
-      "PowerShell(New-Item *)"
+      "PowerShell(New-Item *)",
+      "Bash(git checkout *)",
+      "Bash(psql -U fabriziocontreras -h localhost -d postgres -c \"SELECT datname FROM pg_database WHERE datname='compra_inteligente';\")",
+      "Bash(psql -U fabriziocontreras -h localhost -d compra_inteligente -c \"\\\\dt\")",
+      "Bash(dropdb -U fabriziocontreras -h localhost compra_inteligente)",
+      "Bash(createdb -U fabriziocontreras -h localhost compra_inteligente)"
     ]
   }
 }

@@ -1,19 +1,34 @@
-"""Compra Inteligente schedule service.
+"""Cronograma de la modalidad «Compra Inteligente» (crédito con cuota balón).
 
-Models the Peruvian "Compra Inteligente" modality:
+Procedimiento
+=============
+La modalidad peruana «Compra Inteligente» combina tres pagos:
 
-* The buyer pays an *initial payment* (CI) at t=0.
-* A regular French payment R is paid at the end of each of N periods.
-* A balloon (cuota final / CF) is paid at the end of period N.
+* Una *cuota inicial* CI = precio × %inicial, pagada en t=0.
+* ``N`` cuotas francesas regulares ``R`` al vencimiento de cada período.
+* Una *cuota final* (balón) CF = precio × %final, pagada junto con la cuota
+  del último período.
 
-The principal MF = vehicle_price - CI.  Equating present values at the periodic
-rate i (TEP) gives, for a constant rate and no grace::
+El monto financiado es MF = precio − CI. Igualando valores presentes a la
+tasa del período ``i`` (TEP), con tasa constante y sin gracia::
 
-        MF = R * a(N, i) + CF / (1+i)^N
-   →    R = (MF - CF / (1+i)^N) / a(N, i)
+    MF = R * a(N, i) + CF / (1+i)^N
+  → R  = ( MF − CF / (1+i)^N ) / a(N, i)
 
-For variable rate or grace periods we delegate to ``FrenchAmortizationService``
-treating the balloon as an extra amortization paid in the final period.
+donde ``a(N, i) = [(1+i)^N − 1] / [i(1+i)^N]`` es el factor de la anualidad.
+Es decir: la cuota regular se calcula sobre el principal *reducido* por el
+valor presente del balón, y el balón se amortiza íntegro al final.
+
+Con tasa variable o períodos de gracia no hay fórmula cerrada; la abstracción
+reutiliza ``FrenchAmortizationService``:
+
+1. Se descuenta CF a t=0 componiendo la TEP de *cada* período.
+2. Se construye un cronograma francés *sintético* sobre el principal efectivo
+   ``MF − VP(CF)``; sus cuotas son las cuotas regulares del plan.
+3. Se recorre el saldo real (que parte de MF) aplicando esas cuotas; el último
+   período amortiza todo el saldo restante (cuota regular + balón).
+
+Los signos siguen la metodología: interés/cuota/amortización negativos.
 """
 
 from __future__ import annotations
@@ -32,6 +47,8 @@ from src.shared.domain.exceptions import DomainError
 
 @dataclass(frozen=True, slots=True)
 class CompraInteligenteSchedule:
+    """Resultado del plan: CI, balón, monto financiado y filas del cronograma."""
+
     initial_payment: Decimal
     balloon: Decimal
     amount_financed: Decimal
@@ -40,12 +57,14 @@ class CompraInteligenteSchedule:
 
 
 def _annuity_factor(tep: Decimal, n: int) -> Decimal:
+    """Factor de la anualidad a(n, i) = [(1+i)^n − 1] / [i(1+i)^n]."""
     one_plus = Decimal(1) + tep
     factor = one_plus**n
     return (factor - Decimal(1)) / (tep * factor)
 
 
 def _present_value(amount: Decimal, tep: Decimal, n: int) -> Decimal:
+    """Valor presente de un monto pagado dentro de ``n`` períodos a tasa TEP."""
     return amount / ((Decimal(1) + tep) ** n)
 
 
@@ -88,6 +107,7 @@ class CompraInteligenteService:
         mf = vehicle_price - ci
 
         if _all_rates_equal(periods) and _all_no_grace(periods):
+            # Caso con fórmula cerrada: R = (MF − VP(CF)) / a(N, i).
             tep = periods[0].tep
             r = -((mf - _present_value(cf, tep, n)) / _annuity_factor(tep, n))
             rows: list[ScheduleRow] = []
@@ -99,7 +119,8 @@ class CompraInteligenteService:
                     amortization = payment - interest
                     sf = si + amortization
                 else:
-                    # Final period: regular payment + balloon
+                    # Último período: la amortización absorbe todo el saldo
+                    # (cuota regular + balón) y el saldo cierra en 0.
                     amortization = -si
                     payment = interest + amortization
                     sf = Decimal(0)
@@ -118,6 +139,7 @@ class CompraInteligenteService:
         else:
             rows = _build_variable_rate_or_grace(mf, cf, periods)
 
+        # Verificación de cierre: la amortización total debe igualar el MF.
         amort_total = sum((-row.amortization for row in rows), Decimal(0))
         if abs(amort_total - mf) > Decimal("0.01"):
             raise DomainError(
@@ -138,22 +160,20 @@ def _build_variable_rate_or_grace(
     cf: Decimal,
     periods: list[SchedulePeriodInput],
 ) -> list[ScheduleRow]:
-    """Variable-rate / grace path.
+    """Camino de tasa variable o con gracia (sin fórmula cerrada).
 
-    We find the regular payment R that, when applied to a French schedule on the
-    full MF with the supplied period structure, leaves exactly ``cf`` outstanding
-    at the end of the final period.  The final-period row is then rewritten so
-    its amortization absorbs the remaining balance (the balloon).
+    Se busca la cuota regular R que deja exactamente ``cf`` de saldo al final
+    del último período: se descuenta CF a t=0 componiendo la TEP de cada
+    período, se arma un cronograma francés sintético sobre ``MF − VP(CF)`` y
+    luego se reconstruye el cronograma real sobre MF usando esas cuotas; el
+    último período amortiza el saldo restante (el balón).
     """
     n = len(periods)
     last_grace: GraceType = periods[-1].grace_type
     if last_grace != "S":
         raise DomainError("Final period must not be in grace for Compra Inteligente")
 
-    # We build a synthetic French schedule where the *effective principal*
-    # has been reduced by the present value of CF, so the resulting payment R
-    # is the regular instalment of the Compra Inteligente plan.
-    # Discount CF through every period back to t=0 using each period's TEP.
+    # VP del balón: se compone la TEP de cada período (soporta tasa variable).
     discount = Decimal(1)
     for p in periods:
         discount *= Decimal(1) + p.tep
@@ -163,8 +183,8 @@ def _build_variable_rate_or_grace(
 
     synthetic = FrenchAmortizationService.build_schedule(effective_principal, periods)
 
-    # Re-derive the *real* schedule against MF using the payments from the
-    # synthetic schedule for periods 1..n-1.  Period n absorbs the balloon.
+    # Cronograma real contra MF con las cuotas del sintético (períodos 1..n-1);
+    # el período n absorbe el balón.
     rows: list[ScheduleRow] = []
     si = mf
     for idx, (p, srow) in enumerate(zip(periods, synthetic, strict=True), start=1):

@@ -40,6 +40,11 @@ class SqlAlchemyLoanRepository:
         orm = await self._session.get(LoanORM, loan.id)
         if orm is None:
             raise NotFoundError(f"Loan {loan.id} not found")
+        # Hay que hacer flush de los DELETE huérfanos antes de que loan_to_orm
+        # vuelva a poblar el cronograma; en un solo flush SQLAlchemy emite
+        # primero los INSERT nuevos y viola uq_schedule_loan_period.
+        orm.schedule_entries.clear()
+        await self._session.flush()
         loan_to_orm(loan, orm)
         await self._session.flush()
 
