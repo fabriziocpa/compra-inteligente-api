@@ -56,7 +56,17 @@ class SchedulePeriodInput:
 
 @dataclass(frozen=True, slots=True)
 class ScheduleRow:
-    """Fila calculada del plan de pagos (saldos, interés, cuota, amortización)."""
+    """Fila calculada del plan de pagos (saldos, interés, cuota, amortización).
+
+    Los campos extra reproducen las columnas de la hoja Interbank:
+
+    * ``insurance`` — seguro de desgravamen del período (columna ``SegDes``,
+      negativo). En períodos normales (S) ya está DENTRO de ``payment``
+      («Cuota inc Seg Des»); en gracia T/P se paga aparte en efectivo.
+    * ``balloon_*`` — sub-cronograma del cuotón (columnas SICF/ICF/SegDesCF/
+      ACF/SFCF): su saldo capitaliza interés + desgravamen cada período y se
+      paga íntegro en el período N+1. Todos quedan en 0 si no hay balón.
+    """
 
     period: int
     grace_type: str
@@ -65,6 +75,12 @@ class ScheduleRow:
     payment: Decimal
     amortization: Decimal
     final_balance: Decimal
+    insurance: Decimal = Decimal(0)
+    balloon_initial: Decimal = Decimal(0)
+    balloon_interest: Decimal = Decimal(0)
+    balloon_insurance: Decimal = Decimal(0)
+    balloon_amortization: Decimal = Decimal(0)
+    balloon_final: Decimal = Decimal(0)
 
 
 def _french_payment(balance: Decimal, tep: Decimal, periods_remaining: int) -> Decimal:
