@@ -26,9 +26,22 @@ class LoanORM(BaseORM):
     balloon_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
     term_periods: Mapped[int] = mapped_column(nullable=False)
     frequency_days: Mapped[int] = mapped_column(nullable=False)
+    # Costes iniciales financiados (se suman al monto del préstamo).
+    financed_costs: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), nullable=False, default=Decimal(0), server_default="0"
+    )
+    # % mensual del seguro de desgravamen sobre el saldo (dentro de la cuota).
+    desgravamen_monthly_pct: Mapped[Decimal] = mapped_column(
+        Numeric(12, 8), nullable=False, default=Decimal(0), server_default="0"
+    )
     rate_spec: Mapped[dict] = mapped_column(JSONB, nullable=False)
     grace_policy: Mapped[dict] = mapped_column(JSONB, nullable=False)
     additional_charges: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # Desglose de costos iniciales: [{name, amount, financed}]. La suma de los
+    # financiados coincide con financed_costs.
+    initial_costs: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
 
     schedule_entries: Mapped[list[ScheduleEntryORM]] = relationship(

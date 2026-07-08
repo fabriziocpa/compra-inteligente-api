@@ -1,3 +1,5 @@
+"""Endpoints de préstamos: creación, edición, cronograma e indicadores."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -7,6 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.contexts.audit.infrastructure.orm_operation import registrar_operacion
 from src.contexts.auth.interfaces.dependencies import CurrentUser
 from src.contexts.clients.infrastructure.sqlalchemy_client_repository import (
     SqlAlchemyClientRepository,
@@ -14,6 +17,7 @@ from src.contexts.clients.infrastructure.sqlalchemy_client_repository import (
 from src.contexts.loans.application.commands.create_loan_command import (
     AdditionalChargeInput,
     CreateLoanCommand,
+    InitialCostInput,
     RateSegmentInput,
 )
 from src.contexts.loans.application.use_cases.calculate_indicators import (
@@ -24,6 +28,10 @@ from src.contexts.loans.application.use_cases.calculate_schedule import (
 )
 from src.contexts.loans.application.use_cases.create_loan import CreateLoanUseCase
 from src.contexts.loans.domain.entities.loan import Loan
+from src.contexts.loans.domain.services.rate_converter import tep_from_tea
+from src.contexts.loans.domain.services.schedule_summary_service import (
+    ScheduleSummaryService,
+)
 from src.contexts.loans.domain.value_objects.additional_charge import (
     AdditionalCharge,
     ChargeBasis,
@@ -33,23 +41,37 @@ from src.contexts.loans.domain.value_objects.grace_period_policy import (
     GraceCode,
     GracePeriodPolicy,
 )
+from src.contexts.loans.domain.value_objects.initial_cost import (
+    InitialCost,
+    financed_total,
+)
 from src.contexts.loans.domain.value_objects.interest_rate_spec import (
     InterestRateSpec,
     RateKind,
     RateSegment,
 )
+from src.contexts.loans.domain.value_objects.loan_terms import LoanTerms
 from src.contexts.loans.infrastructure.sqlalchemy_loan_repository import (
     SqlAlchemyLoanRepository,
 )
 from src.contexts.loans.interfaces.schemas import (
+    AdditionalChargeSchema,
+    ChargeAmountResponse,
+    ChargeSummaryItemResponse,
+    ColumnTotalsResponse,
+    GraceCodeSchema,
     IndicatorsResponse,
+    InitialCostSchema,
     LoanCreateRequest,
     LoanPatchRequest,
     LoanResponse,
+    RateSegmentSchema,
     ScheduleEntryResponse,
     ScheduleResponse,
+    ScheduleSummaryResponse,
 )
 from src.shared.domain.exceptions import AuthorizationError, NotFoundError
+from src.shared.domain.money import Currency
 from src.shared.infrastructure.database import get_session
 
 router = APIRouter(prefix="/loans", tags=["loans"])
@@ -68,8 +90,105 @@ def _to_response(loan: Loan) -> LoanResponse:
         balloon_pct=loan.terms.balloon_pct,
         term_periods=loan.terms.term_periods,
         frequency_days=loan.terms.frequency_days,
+        financed_costs=loan.terms.financed_costs,
+        initial_costs=[
+            InitialCostSchema(name=c.name, amount=c.amount, financed=c.financed)
+            for c in loan.initial_costs
+        ],
+        desgravamen_monthly_pct=loan.terms.desgravamen_monthly_pct,
+        rate_segments=[
+            RateSegmentSchema(
+                from_period=s.from_period,
+                to_period=s.to_period,
+                rate_kind=s.rate_kind,
+                rate_value=s.rate_value,
+                capitalizations_per_year=s.capitalizations_per_year,
+            )
+            for s in loan.rate_spec.segments
+        ],
+        grace_periods=[cast(GraceCodeSchema, g) for g in loan.grace_policy.periods],
+        additional_charges=[
+            AdditionalChargeSchema(
+                name=c.name,
+                kind=c.kind,
+                basis=c.basis,
+                value=c.value,
+                applies_from_period=c.applies_from_period,
+                applies_to_period=c.applies_to_period,
+            )
+            for c in loan.additional_charges
+        ],
         status=loan.status,
         created_at=loan.created_at,
+    )
+
+
+def _summary_response(loan: Loan) -> ScheduleSummaryResponse | None:
+    if not loan.schedule:
+        return None
+    s = ScheduleSummaryService.summarize(loan)
+    item = lambda c: ChargeSummaryItemResponse(name=c.name, kind=c.kind, amount=c.amount)  # noqa: E731
+    return ScheduleSummaryResponse(
+        tea=s.tea,
+        tep=s.tep,
+        payments_per_year=s.payments_per_year,
+        total_payments=s.total_payments,
+        initial_payment=s.initial_payment,
+        balloon=s.balloon,
+        financed_costs=s.financed_costs,
+        cash_costs=s.cash_costs,
+        loan_principal=s.loan_principal,
+        regular_principal=s.regular_principal,
+        balloon_present_value=s.balloon_present_value,
+        regular_payment=s.regular_payment,
+        balloon_payment=s.balloon_payment,
+        has_balloon=s.has_balloon,
+        desgravamen_pct_per_period=s.desgravamen_pct_per_period,
+        periodic_charges=[item(c) for c in s.periodic_charges],
+        total_interest=s.total_interest,
+        total_amortization=s.total_amortization,
+        total_insurance=s.total_insurance,
+        total_charges=[item(c) for c in s.total_charges],
+        column_totals=ColumnTotalsResponse(
+            interest=s.column_totals.interest,
+            payment=s.column_totals.payment,
+            amortization=s.column_totals.amortization,
+            insurance=s.column_totals.insurance,
+            balloon_amortization=s.column_totals.balloon_amortization,
+            charges=s.column_totals.charges,
+            total_payment=s.column_totals.total_payment,
+        ),
+    )
+
+
+def _schedule_response(loan: Loan) -> ScheduleResponse:
+    return ScheduleResponse(
+        loan_id=loan.id,
+        summary=_summary_response(loan),
+        rows=[
+            ScheduleEntryResponse(
+                period=e.period,
+                grace_type=e.grace_type,
+                initial_balance=e.initial_balance,
+                interest=e.interest,
+                payment=e.payment,
+                amortization=e.amortization,
+                final_balance=e.final_balance,
+                insurance=e.insurance,
+                balloon_initial=e.balloon_initial,
+                balloon_interest=e.balloon_interest,
+                balloon_insurance=e.balloon_insurance,
+                balloon_amortization=e.balloon_amortization,
+                balloon_final=e.balloon_final,
+                charges=[
+                    ChargeAmountResponse(name=c.name, kind=c.kind, amount=c.amount)
+                    for c in e.charges
+                ],
+                charges_total=e.charges_total,
+                total_payment=e.total_payment,
+            )
+            for e in loan.schedule
+        ],
     )
 
 
@@ -113,6 +232,12 @@ async def create_loan(
         balloon_pct=body.balloon_pct,
         term_periods=body.term_periods,
         frequency_days=body.frequency_days,
+        financed_costs=body.financed_costs,
+        initial_costs=[
+            InitialCostInput(name=c.name, amount=c.amount, financed=c.financed)
+            for c in body.initial_costs
+        ],
+        desgravamen_monthly_pct=body.desgravamen_monthly_pct,
         rate_segments=[
             RateSegmentInput(
                 from_period=s.from_period,
@@ -139,6 +264,14 @@ async def create_loan(
     repo = SqlAlchemyLoanRepository(session)
     uc = CreateLoanUseCase(repo)
     loan = await uc.execute(cmd)
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="loan.created",
+        entity_type="loan",
+        entity_id=loan.id,
+        detail={"client_id": str(loan.client_id), "vehicle_price": str(loan.terms.vehicle_price)},
+    )
     await session.commit()
     return _to_response(loan)
 
@@ -161,13 +294,45 @@ async def update_loan(
     loan = await repo.get(loan_id)
     await _ensure_owner(loan, user.id, session)
 
-    if body.initial_payment_pct is not None:
-        object.__setattr__(loan.terms, "initial_payment_pct", body.initial_payment_pct)
-    if body.balloon_pct is not None:
-        object.__setattr__(loan.terms, "balloon_pct", body.balloon_pct)
+    changed = body.model_dump(exclude_unset=True).keys()
+
+    # Con desglose nuevo, los financiados mandan sobre body.financed_costs.
+    new_initial_costs: tuple[InitialCost, ...] | None = None
+    if body.initial_costs is not None:
+        new_initial_costs = tuple(
+            InitialCost(name=c.name, amount=c.amount, financed=c.financed)
+            for c in body.initial_costs
+        )
+        new_financed = financed_total(new_initial_costs)
+    elif body.financed_costs is not None:
+        new_financed = body.financed_costs
+    else:
+        new_financed = loan.terms.financed_costs
+
+    new_terms = LoanTerms(
+        currency=Currency(body.currency) if body.currency is not None else loan.terms.currency,
+        vehicle_price=body.vehicle_price if body.vehicle_price is not None else loan.terms.vehicle_price,
+        initial_payment_pct=(
+            body.initial_payment_pct
+            if body.initial_payment_pct is not None
+            else loan.terms.initial_payment_pct
+        ),
+        balloon_pct=body.balloon_pct if body.balloon_pct is not None else loan.terms.balloon_pct,
+        term_periods=body.term_periods if body.term_periods is not None else loan.terms.term_periods,
+        frequency_days=(
+            body.frequency_days if body.frequency_days is not None else loan.terms.frequency_days
+        ),
+        financed_costs=new_financed,
+        desgravamen_monthly_pct=(
+            body.desgravamen_monthly_pct
+            if body.desgravamen_monthly_pct is not None
+            else loan.terms.desgravamen_monthly_pct
+        ),
+    )
+    new_spec: InterestRateSpec | None = None
     if body.rate_segments is not None:
-        loan.rate_spec = InterestRateSpec(
-            days_in_period=loan.terms.frequency_days,
+        new_spec = InterestRateSpec(
+            days_in_period=new_terms.frequency_days,
             segments=tuple(
                 RateSegment(
                     from_period=s.from_period,
@@ -179,12 +344,14 @@ async def update_loan(
                 for s in body.rate_segments
             ),
         )
+    new_grace: GracePeriodPolicy | None = None
     if body.grace_periods is not None:
-        loan.grace_policy = GracePeriodPolicy(
+        new_grace = GracePeriodPolicy(
             periods=tuple(cast(GraceCode, g) for g in body.grace_periods)
         )
+    new_charges: tuple[AdditionalCharge, ...] | None = None
     if body.additional_charges is not None:
-        loan.additional_charges = tuple(
+        new_charges = tuple(
             AdditionalCharge(
                 name=c.name,
                 kind=cast(ChargeKind, c.kind),
@@ -195,8 +362,23 @@ async def update_loan(
             )
             for c in body.additional_charges
         )
-    loan.touch()
+
+    loan.update_parameters(
+        terms=new_terms,
+        rate_spec=new_spec,
+        grace_policy=new_grace,
+        additional_charges=new_charges,
+        initial_costs=new_initial_costs,
+    )
     await repo.update(loan)
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="loan.updated",
+        entity_type="loan",
+        entity_id=loan.id,
+        detail={"fields": sorted(changed)},
+    )
     await session.commit()
     return _to_response(loan)
 
@@ -209,6 +391,13 @@ async def delete_loan(
     loan = await repo.get(loan_id)
     await _ensure_owner(loan, user.id, session)
     await repo.delete(loan_id)
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="loan.deleted",
+        entity_type="loan",
+        entity_id=loan_id,
+    )
     await session.commit()
 
 
@@ -221,22 +410,16 @@ async def generate_schedule(
     await _ensure_owner(loan, user.id, session)
     uc = CalculateScheduleUseCase(repo)
     loan = await uc.execute(loan_id)
-    await session.commit()
-    return ScheduleResponse(
-        loan_id=loan.id,
-        rows=[
-            ScheduleEntryResponse(
-                period=e.period,
-                grace_type=e.grace_type,
-                initial_balance=e.initial_balance,
-                interest=e.interest,
-                payment=e.payment,
-                amortization=e.amortization,
-                final_balance=e.final_balance,
-            )
-            for e in loan.schedule
-        ],
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="loan.schedule_generated",
+        entity_type="loan",
+        entity_id=loan.id,
+        detail={"rows": len(loan.schedule)},
     )
+    await session.commit()
+    return _schedule_response(loan)
 
 
 @router.get("/{loan_id}/schedule", response_model=ScheduleResponse)
@@ -246,21 +429,7 @@ async def get_schedule(
     repo = SqlAlchemyLoanRepository(session)
     loan = await repo.get(loan_id)
     await _ensure_owner(loan, user.id, session)
-    return ScheduleResponse(
-        loan_id=loan.id,
-        rows=[
-            ScheduleEntryResponse(
-                period=e.period,
-                grace_type=e.grace_type,
-                initial_balance=e.initial_balance,
-                interest=e.interest,
-                payment=e.payment,
-                amortization=e.amortization,
-                final_balance=e.final_balance,
-            )
-            for e in loan.schedule
-        ],
-    )
+    return _schedule_response(loan)
 
 
 @router.get("/{loan_id}/indicators", response_model=IndicatorsResponse)
@@ -268,17 +437,35 @@ async def get_indicators(
     loan_id: UUID,
     user: CurrentUser,
     session: SessionDep,
-    discount_rate_per_period: Annotated[Decimal | None, Query()] = None,
+    # COK para el VAN; no puede ser negativo. El anual (el que digita el
+    # usuario) se convierte aquí a la tasa del período:
+    # COKi = (1 + COK)^(frec/360) − 1. Si llegan ambos, gana el anual.
+    discount_rate_annual: Annotated[Decimal | None, Query(ge=0)] = None,
+    discount_rate_per_period: Annotated[Decimal | None, Query(ge=0)] = None,
 ) -> IndicatorsResponse:
     repo = SqlAlchemyLoanRepository(session)
     loan = await repo.get(loan_id)
     await _ensure_owner(loan, user.id, session)
+    if discount_rate_annual is not None:
+        discount_rate_per_period = tep_from_tea(
+            discount_rate_annual, loan.terms.frequency_days
+        )
     uc = CalculateIndicatorsUseCase(repo)
     result = await uc.execute(loan_id, discount_rate_per_period)
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="loan.indicators_calculated",
+        entity_type="loan",
+        entity_id=loan.id,
+        detail={"tcea": str(result.tcea)},
+    )
+    await session.commit()
     return IndicatorsResponse(
         loan_id=loan.id,
         tir_per_period=result.tir_per_period,
         tcea=result.tcea,
         van_at_period_rate=result.van_at_period_rate,
+        discount_rate_per_period=discount_rate_per_period,
         cashflows=result.cashflows,
     )

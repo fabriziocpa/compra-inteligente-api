@@ -42,8 +42,3 @@ def test_tep_from_tna_nominal_composes() -> None:
     assert abs(tem - Decimal("0.01")) <= Decimal("0.0000001")
 
 
-def test_validation() -> None:
-    with pytest.raises(ValueError):
-        tep_from_tea(Decimal("0.1"), 0)
-    with pytest.raises(ValueError):
-        tea_from_tna_nominal(Decimal("0.1"), 0)

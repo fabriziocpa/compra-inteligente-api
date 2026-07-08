@@ -1,11 +1,39 @@
-"""French (vencido ordinario) amortization service.
+"""Método francés «vencido ordinario» (Unidad 3 — Planes de pago).
 
-Supports variable rate (TEP changing between periods) and grace periods:
-    * ``T`` total — payment 0, amortization 0, interest capitalises (SF = SI*(1+TEP)).
-    * ``P`` partial — payment equals interest, amortization 0, SF unchanged.
-    * ``S`` standard — fixed (recomputed) French payment.
+Procedimiento de la metodología
+===============================
+El préstamo ``C`` se paga en ``n`` cuotas vencidas iguales ``R``. Con la tasa
+efectiva del período ``i`` (TEP), la cuota sale de igualar el valor presente
+de la anualidad al principal::
 
-Signs follow the spec: interest, payment and amortization are NEGATIVE (egresos del deudor).
+    R = C * [ i(1+i)^n ] / [ (1+i)^n - 1 ]        (equivale a  R = C / a(n,i))
+
+Cada período se descompone así (meses de 30 días, año de 360):
+
+1. Interés del período:      I_k = SI_k * TEP      (SI = saldo inicial)
+2. Amortización de capital:  A_k = R - I_k
+3. Saldo final:              SF_k = SI_k + A_k     (con signos, A_k es negativo)
+
+Períodos de gracia
+------------------
+* ``T`` (total):   no se paga nada. El interés se CAPITALIZA al saldo:
+                   ``SF = SI * (1 + TEP)``; cuota y amortización son 0.
+* ``P`` (parcial): se paga SOLO el interés (``cuota = interés``); no se
+                   amortiza capital, así que ``SF = SI``.
+* ``S`` (normal):  cuota francesa completa.
+
+Recálculo de la cuota
+---------------------
+La cuota deja de ser válida cuando cambia la TEP (tasa variable) o cuando el
+período anterior fue de gracia (el saldo ya no siguió la trayectoria prevista).
+En ese caso se recalcula sobre el saldo vigente y los períodos que faltan::
+
+    R = SI * [ TEP(1+TEP)^(n-k+1) ] / [ (1+TEP)^(n-k+1) - 1 ]
+
+donde ``k`` es el período actual (quedan ``n-k+1`` cuotas por pagar).
+
+Convención de signos: interés, cuota y amortización son NEGATIVOS
+(egresos del deudor), igual que en la separata del curso.
 """
 
 from __future__ import annotations
@@ -19,6 +47,8 @@ GraceType = Literal["T", "P", "S"]
 
 @dataclass(frozen=True, slots=True)
 class SchedulePeriodInput:
+    """Datos de entrada de un período: número, TEP vigente y tipo de gracia."""
+
     period_number: int
     tep: Decimal
     grace_type: GraceType
@@ -26,6 +56,18 @@ class SchedulePeriodInput:
 
 @dataclass(frozen=True, slots=True)
 class ScheduleRow:
+    """Fila calculada del plan de pagos (saldos, interés, cuota, amortización).
+
+    Los campos extra reproducen las columnas de la hoja Interbank:
+
+    * ``insurance`` — seguro de desgravamen del período (columna ``SegDes``,
+      negativo). En períodos normales (S) ya está DENTRO de ``payment``
+      («Cuota inc Seg Des»); en gracia T/P se paga aparte en efectivo.
+    * ``balloon_*`` — sub-cronograma del cuotón (columnas SICF/ICF/SegDesCF/
+      ACF/SFCF): su saldo capitaliza interés + desgravamen cada período y se
+      paga íntegro en el período N+1. Todos quedan en 0 si no hay balón.
+    """
+
     period: int
     grace_type: str
     initial_balance: Decimal
@@ -33,10 +75,20 @@ class ScheduleRow:
     payment: Decimal
     amortization: Decimal
     final_balance: Decimal
+    insurance: Decimal = Decimal(0)
+    balloon_initial: Decimal = Decimal(0)
+    balloon_interest: Decimal = Decimal(0)
+    balloon_insurance: Decimal = Decimal(0)
+    balloon_amortization: Decimal = Decimal(0)
+    balloon_final: Decimal = Decimal(0)
 
 
 def _french_payment(balance: Decimal, tep: Decimal, periods_remaining: int) -> Decimal:
-    """Return the *negative* French payment R for ``periods_remaining`` periods."""
+    """Cuota francesa (negativa) para ``periods_remaining`` períodos.
+
+    Implementa R = saldo / a(n, i), donde a(n, i) = [(1+i)^n - 1] / [i(1+i)^n]
+    es el factor de actualización de la serie uniforme.
+    """
     one_plus_tep = Decimal(1) + tep
     factor = one_plus_tep**periods_remaining
     annuity = (factor - Decimal(1)) / (tep * factor)
@@ -44,7 +96,13 @@ def _french_payment(balance: Decimal, tep: Decimal, periods_remaining: int) -> D
 
 
 class FrenchAmortizationService:
-    """Pure-domain service. No I/O, no DB."""
+    """Servicio de dominio puro: sin I/O ni base de datos.
+
+    La abstracción recibe el principal y la lista de períodos ya resuelta
+    (cada uno con su TEP y su tipo de gracia) y devuelve el plan fila por
+    fila. Las conversiones de tasa y la política de gracia se resuelven
+    antes, en ``InterestRateSpec`` y ``GracePeriodPolicy``.
+    """
 
     @staticmethod
     def build_schedule(
@@ -64,6 +122,8 @@ class FrenchAmortizationService:
         prev_grace: GraceType | None = None
 
         for idx, p in enumerate(periods, start=1):
+            # La cuota se (re)calcula al inicio, si cambió la TEP o si el
+            # período anterior fue de gracia (el saldo se desvió del plan).
             recompute = (
                 current_r is None
                 or (prev_tep is not None and p.tep != prev_tep)
@@ -77,10 +137,12 @@ class FrenchAmortizationService:
             interest = -(si * p.tep)
 
             if p.grace_type == "T":
+                # Gracia total: el interés se capitaliza al saldo.
                 payment = Decimal(0)
                 amortization = Decimal(0)
                 sf = si * (Decimal(1) + p.tep)
             elif p.grace_type == "P":
+                # Gracia parcial: se paga solo el interés; el saldo no baja.
                 payment = interest
                 amortization = Decimal(0)
                 sf = si

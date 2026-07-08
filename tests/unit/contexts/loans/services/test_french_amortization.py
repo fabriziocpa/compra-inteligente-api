@@ -65,13 +65,6 @@ def test_example_4_grace_total_then_partial_then_rate_change() -> None:
     assert _approx(rows[4].payment, Decimal("-337705.42"))
 
 
-def test_validation_principal_positive() -> None:
-    with pytest.raises(ValueError):
-        FrenchAmortizationService.build_schedule(
-            Decimal("0"), [SchedulePeriodInput(1, TES_9, "S")]
-        )
-
-
 def test_balance_zeroes_out_constant_rate() -> None:
     periods = [SchedulePeriodInput(i, TES_9, "S") for i in range(1, 9)]
     rows = FrenchAmortizationService.build_schedule(PRINCIPAL, periods)

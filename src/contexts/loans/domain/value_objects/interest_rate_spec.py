@@ -1,3 +1,16 @@
+"""Especificación de la tasa de interés del préstamo, por tramos.
+
+La tasa puede cambiar a lo largo del plazo (tasa variable): se modela como
+tramos contiguos ``[from_period, to_period]`` que cubren todos los períodos.
+Cada tramo declara su tasa como TEA (efectiva anual) o TNA (nominal anual con
+``m`` capitalizaciones).
+
+La abstracción expone un solo método, ``tep_for_period``: dado un período,
+ubica su tramo y convierte la tasa declarada a la TEP del período usando
+``rate_converter`` (TEA → TEP directo; TNA → TEA → TEP). Así el motor del
+cronograma solo trabaja con TEPs y no conoce las convenciones de entrada.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -14,13 +27,13 @@ RateKind = Literal["TEA", "TNA"]
 
 @dataclass(frozen=True, slots=True)
 class RateSegment:
-    """A contiguous block of periods sharing the same rate."""
+    """Bloque contiguo de períodos que comparten la misma tasa."""
 
     from_period: int
     to_period: int
     rate_kind: RateKind
     rate_value: Decimal
-    capitalizations_per_year: int | None = None  # required for TNA
+    capitalizations_per_year: int | None = None  # obligatorio para TNA
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +43,7 @@ class InterestRateSpec:
     days_in_year: int = 360
 
     def tep_for_period(self, period: int) -> Decimal:
+        """TEP vigente en el período: ubica el tramo y convierte su tasa."""
         for seg in self.segments:
             if seg.from_period <= period <= seg.to_period:
                 if seg.rate_kind == "TEA":

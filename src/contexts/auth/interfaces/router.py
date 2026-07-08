@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.contexts.audit.infrastructure.orm_operation import registrar_operacion
 from src.contexts.auth.application.login_user import (
     LoginInput,
     LoginUserUseCase,
@@ -39,6 +40,14 @@ async def register(body: RegisterRequest, session: SessionDep) -> UserResponse:
     user = await uc.execute(
         RegisterUserInput(email=body.email, password=body.password, full_name=body.full_name)
     )
+    registrar_operacion(
+        session,
+        user_id=user.id,
+        action="auth.registered",
+        entity_type="user",
+        entity_id=user.id,
+        detail={"email": user.email},
+    )
     await session.commit()
     return UserResponse(
         id=user.id,
@@ -54,6 +63,15 @@ async def login(body: LoginRequest, session: SessionDep) -> TokenResponse:
     repo = SqlAlchemyUserRepository(session)
     uc = LoginUserUseCase(repo, PasswordHasher(), JWTProvider())
     tokens = await uc.execute(LoginInput(email=body.email, password=body.password))
+    logged = await repo.get_by_email(body.email)
+    registrar_operacion(
+        session,
+        user_id=logged.id if logged else None,
+        action="auth.logged_in",
+        entity_type="user",
+        entity_id=logged.id if logged else None,
+    )
+    await session.commit()
     return TokenResponse(
         access_token=tokens.access_token,
         refresh_token=tokens.refresh_token,

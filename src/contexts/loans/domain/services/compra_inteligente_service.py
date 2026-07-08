@@ -1,19 +1,48 @@
-"""Compra Inteligente schedule service.
+"""Cronograma «Compra Inteligente» estilo Interbank (crédito con cuota balón).
 
-Models the Peruvian "Compra Inteligente" modality:
+Procedimiento (hoja «06 - Planes de Pago - Ordinario - Compra Inteligente IB»)
+==============================================================================
+La modalidad combina tres pagos:
 
-* The buyer pays an *initial payment* (CI) at t=0.
-* A regular French payment R is paid at the end of each of N periods.
-* A balloon (cuota final / CF) is paid at the end of period N.
+* Una *cuota inicial* CI = precio × %inicial, pagada en t=0.
+* ``N`` cuotas francesas regulares al vencimiento de cada período.
+* Una *cuota final* (balón o «cuotón») CF = precio × %final, pagada en un
+  período EXTRA ``N+1``.
 
-The principal MF = vehicle_price - CI.  Equating present values at the periodic
-rate i (TEP) gives, for a constant rate and no grace::
+El monto del préstamo incluye los costes iniciales financiados::
 
-        MF = R * a(N, i) + CF / (1+i)^N
-   →    R = (MF - CF / (1+i)^N) / a(N, i)
+    Prestamo = PV − CI + costes financiados
 
-For variable rate or grace periods we delegate to ``FrenchAmortizationService``
-treating the balloon as an extra amortization paid in the final period.
+El cuotón se separa en su propio sub-cronograma: su saldo inicial es el valor
+presente de CF descontado a la tasa del período MÁS el desgravamen::
+
+    SICF₁ = CF / Π_{k=1..N+1} (1 + TEP_k + pSegDesPer)
+
+Ese saldo capitaliza interés y desgravamen cada período (no se amortiza) y se
+paga íntegro (= CF) en el período N+1. El resto del préstamo::
+
+    Saldo = Prestamo − SICF₁
+
+se amortiza con el método francés en N cuotas. El seguro de desgravamen va
+DENTRO de la anualidad («Cuota inc Seg Des»)::
+
+    Cuota_k = PMT(TEP_k + pSegDesPer, N−k+1, SI_k)
+    Amortización_k = Cuota_k − Interés_k − SegDes_k
+
+La cuota se recalcula cada fila sobre el saldo vigente, así que tras un
+período de gracia o un cambio de tasa se ajusta sola.
+
+Períodos de gracia (solo afectan al cronograma regular; el cuotón siempre
+capitaliza):
+
+* ``T`` (total):   cuota 0; capitaliza SOLO el interés (``SF = SI×(1+TEP)``);
+                   el desgravamen del período se paga en efectivo.
+* ``P`` (parcial): se paga el interés (cuota = interés) y el desgravamen en
+                   efectivo; el saldo no baja.
+* ``S`` (normal):  cuota francesa completa (incluye desgravamen).
+
+Convención de signos de la metodología: interés, cuota, amortización y
+desgravamen NEGATIVOS (egresos del deudor); saldos positivos.
 """
 
 from __future__ import annotations
@@ -22,39 +51,41 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from src.contexts.loans.domain.services.french_amortization_service import (
-    FrenchAmortizationService,
-    GraceType,
     SchedulePeriodInput,
     ScheduleRow,
 )
 from src.shared.domain.exceptions import DomainError
 
+_ZERO = Decimal(0)
+_ONE = Decimal(1)
+_CLOSE_TOL = Decimal("0.01")
+
 
 @dataclass(frozen=True, slots=True)
 class CompraInteligenteSchedule:
+    """Resultado del plan: CI, balón, montos y filas del cronograma.
+
+    * ``amount_financed`` — Prestamo = PV − CI + costes financiados.
+    * ``balloon_present_value`` — SICF₁, saldo inicial del cuotón.
+    * ``regular_principal`` — Saldo financiado con las cuotas regulares.
+    * ``rows`` — N filas regulares, más la fila N+1 del cuotón si hay balón.
+    """
+
     initial_payment: Decimal
     balloon: Decimal
     amount_financed: Decimal
+    balloon_present_value: Decimal
+    regular_principal: Decimal
     rows: list[ScheduleRow]
-    additional_charges_per_period: list[Decimal]
 
 
-def _annuity_factor(tep: Decimal, n: int) -> Decimal:
-    one_plus = Decimal(1) + tep
-    factor = one_plus**n
-    return (factor - Decimal(1)) / (tep * factor)
-
-
-def _present_value(amount: Decimal, tep: Decimal, n: int) -> Decimal:
-    return amount / ((Decimal(1) + tep) ** n)
-
-
-def _all_rates_equal(periods: list[SchedulePeriodInput]) -> bool:
-    return all(p.tep == periods[0].tep for p in periods)
-
-
-def _all_no_grace(periods: list[SchedulePeriodInput]) -> bool:
-    return all(p.grace_type == "S" for p in periods)
+def _pmt(balance: Decimal, rate: Decimal, periods_remaining: int) -> Decimal:
+    """Cuota francesa (negativa): PMT(tasa, n, saldo). Con tasa 0, saldo/n."""
+    if rate == _ZERO:
+        return -(balance / Decimal(periods_remaining))
+    one_plus = _ONE + rate
+    factor = one_plus**periods_remaining
+    return -(balance * rate * factor / (factor - _ONE))
 
 
 class CompraInteligenteService:
@@ -64,138 +95,134 @@ class CompraInteligenteService:
         initial_payment_pct: Decimal,
         balloon_pct: Decimal,
         periods: list[SchedulePeriodInput],
-        additional_charges_per_period: list[Decimal] | None = None,
+        financed_costs: Decimal = _ZERO,
+        desgravamen_pct_per_period: Decimal = _ZERO,
     ) -> CompraInteligenteSchedule:
-        if vehicle_price <= Decimal(0):
+        if vehicle_price <= _ZERO:
             raise DomainError("vehicle_price must be positive")
-        if not (Decimal(0) <= initial_payment_pct < Decimal(1)):
+        if not (_ZERO <= initial_payment_pct < _ONE):
             raise DomainError("initial_payment_pct must be in [0, 1)")
-        if not (Decimal(0) <= balloon_pct < Decimal(1)):
+        if not (_ZERO <= balloon_pct < _ONE):
             raise DomainError("balloon_pct must be in [0, 1)")
-        if initial_payment_pct + balloon_pct >= Decimal(1):
+        if initial_payment_pct + balloon_pct >= _ONE:
             raise DomainError("initial_payment_pct + balloon_pct must be < 1")
         if not periods:
             raise DomainError("periods must not be empty")
+        if financed_costs < _ZERO:
+            raise DomainError("financed_costs must be >= 0")
+        if not (_ZERO <= desgravamen_pct_per_period < _ONE):
+            raise DomainError("desgravamen_pct_per_period must be in [0, 1)")
 
         n = len(periods)
-        if additional_charges_per_period is None:
-            additional_charges_per_period = [Decimal(0)] * n
-        elif len(additional_charges_per_period) != n:
-            raise DomainError("additional_charges_per_period length must match periods")
-
+        seg = desgravamen_pct_per_period
         ci = vehicle_price * initial_payment_pct
         cf = vehicle_price * balloon_pct
-        mf = vehicle_price - ci
+        prestamo = vehicle_price - ci + financed_costs
 
-        if _all_rates_equal(periods) and _all_no_grace(periods):
-            tep = periods[0].tep
-            r = -((mf - _present_value(cf, tep, n)) / _annuity_factor(tep, n))
-            rows: list[ScheduleRow] = []
-            si = mf
-            for idx, p in enumerate(periods, start=1):
-                interest = -(si * tep)
-                if idx < n:
-                    payment = r
-                    amortization = payment - interest
-                    sf = si + amortization
-                else:
-                    # Final period: regular payment + balloon
-                    amortization = -si
-                    payment = interest + amortization
-                    sf = Decimal(0)
-                rows.append(
-                    ScheduleRow(
-                        period=p.period_number,
-                        grace_type=p.grace_type,
-                        initial_balance=si,
-                        interest=interest,
-                        payment=payment,
-                        amortization=amortization,
-                        final_balance=sf,
-                    )
-                )
-                si = sf
-        else:
-            rows = _build_variable_rate_or_grace(mf, cf, periods)
-
-        amort_total = sum((-row.amortization for row in rows), Decimal(0))
-        if abs(amort_total - mf) > Decimal("0.01"):
+        has_balloon = cf > _ZERO
+        if has_balloon and periods[-1].grace_type != "S":
             raise DomainError(
-                f"Amortization total {amort_total} does not match MF {mf}"
+                "Final period must not be in grace for Compra Inteligente"
+            )
+
+        # VP del cuotón: N+1 factores (1 + TEP_k + pSegDesPer); el período
+        # N+1 usa la TEP del último tramo.
+        if has_balloon:
+            discount = _ONE
+            for p in periods:
+                discount *= _ONE + p.tep + seg
+            discount *= _ONE + periods[-1].tep + seg
+            sicf = cf / discount
+        else:
+            sicf = _ZERO
+
+        saldo = prestamo - sicf
+        if saldo <= _ZERO:
+            raise DomainError("Balloon too large relative to amount financed")
+
+        # --- Cronograma regular (francés con desgravamen en la anualidad) ---
+        rows: list[ScheduleRow] = []
+        si = saldo
+        cuoton = sicf
+        for idx, p in enumerate(periods, start=1):
+            interest = -(si * p.tep)
+            insurance = -(si * seg)
+
+            if p.grace_type == "T":
+                payment = _ZERO
+                amortization = _ZERO
+                sf = si * (_ONE + p.tep)
+            elif p.grace_type == "P":
+                payment = interest
+                amortization = _ZERO
+                sf = si
+            else:
+                payment = _pmt(si, p.tep + seg, n - idx + 1)
+                amortization = payment - interest - insurance
+                sf = si + amortization
+
+            # Sub-cronograma del cuotón: capitaliza interés + desgravamen.
+            b_interest = -(cuoton * p.tep)
+            b_insurance = -(cuoton * seg)
+            b_final = cuoton - b_interest - b_insurance
+
+            rows.append(
+                ScheduleRow(
+                    period=p.period_number,
+                    grace_type=p.grace_type,
+                    initial_balance=si,
+                    interest=interest,
+                    payment=payment,
+                    amortization=amortization,
+                    final_balance=sf,
+                    insurance=insurance,
+                    balloon_initial=cuoton,
+                    balloon_interest=b_interest,
+                    balloon_insurance=b_insurance,
+                    balloon_amortization=_ZERO,
+                    balloon_final=b_final,
+                )
+            )
+            si = sf
+            cuoton = b_final
+
+        # Verificación de cierre del saldo regular (solo si el último período
+        # amortiza; con gracia final el plan queda abierto a propósito).
+        if periods[-1].grace_type == "S" and abs(si) > _CLOSE_TOL:
+            raise DomainError(
+                f"Regular balance does not close to zero: {si}"
+            )
+
+        # --- Período N+1: pago del cuotón (con los cargos del período) ---
+        if has_balloon:
+            tep_last = periods[-1].tep
+            b_interest = -(cuoton * tep_last)
+            b_insurance = -(cuoton * seg)
+            # ACF = −(SICF + |ICF| + |SegDesCF|) = −CF exactamente.
+            b_amort = -(cuoton - b_interest - b_insurance)
+            rows.append(
+                ScheduleRow(
+                    period=n + 1,
+                    grace_type="S",
+                    initial_balance=_ZERO,
+                    interest=_ZERO,
+                    payment=_ZERO,
+                    amortization=_ZERO,
+                    final_balance=_ZERO,
+                    insurance=_ZERO,
+                    balloon_initial=cuoton,
+                    balloon_interest=b_interest,
+                    balloon_insurance=b_insurance,
+                    balloon_amortization=b_amort,
+                    balloon_final=cuoton - b_interest - b_insurance + b_amort,
+                )
             )
 
         return CompraInteligenteSchedule(
             initial_payment=ci,
             balloon=cf,
-            amount_financed=mf,
+            amount_financed=prestamo,
+            balloon_present_value=sicf,
+            regular_principal=saldo,
             rows=rows,
-            additional_charges_per_period=list(additional_charges_per_period),
         )
-
-
-def _build_variable_rate_or_grace(
-    mf: Decimal,
-    cf: Decimal,
-    periods: list[SchedulePeriodInput],
-) -> list[ScheduleRow]:
-    """Variable-rate / grace path.
-
-    We find the regular payment R that, when applied to a French schedule on the
-    full MF with the supplied period structure, leaves exactly ``cf`` outstanding
-    at the end of the final period.  The final-period row is then rewritten so
-    its amortization absorbs the remaining balance (the balloon).
-    """
-    n = len(periods)
-    last_grace: GraceType = periods[-1].grace_type
-    if last_grace != "S":
-        raise DomainError("Final period must not be in grace for Compra Inteligente")
-
-    # We build a synthetic French schedule where the *effective principal*
-    # has been reduced by the present value of CF, so the resulting payment R
-    # is the regular instalment of the Compra Inteligente plan.
-    # Discount CF through every period back to t=0 using each period's TEP.
-    discount = Decimal(1)
-    for p in periods:
-        discount *= Decimal(1) + p.tep
-    effective_principal = mf - cf / discount
-    if effective_principal <= Decimal(0):
-        raise DomainError("Balloon too large relative to amount financed")
-
-    synthetic = FrenchAmortizationService.build_schedule(effective_principal, periods)
-
-    # Re-derive the *real* schedule against MF using the payments from the
-    # synthetic schedule for periods 1..n-1.  Period n absorbs the balloon.
-    rows: list[ScheduleRow] = []
-    si = mf
-    for idx, (p, srow) in enumerate(zip(periods, synthetic, strict=True), start=1):
-        interest = -(si * p.tep)
-        if p.grace_type == "T":
-            payment = Decimal(0)
-            amortization = Decimal(0)
-            sf = si * (Decimal(1) + p.tep)
-        elif p.grace_type == "P":
-            payment = interest
-            amortization = Decimal(0)
-            sf = si
-        else:
-            if idx < n:
-                payment = srow.payment
-                amortization = payment - interest
-                sf = si + amortization
-            else:
-                amortization = -si
-                payment = interest + amortization
-                sf = Decimal(0)
-        rows.append(
-            ScheduleRow(
-                period=p.period_number,
-                grace_type=p.grace_type,
-                initial_balance=si,
-                interest=interest,
-                payment=payment,
-                amortization=amortization,
-                final_balance=sf,
-            )
-        )
-        si = sf
-    return rows

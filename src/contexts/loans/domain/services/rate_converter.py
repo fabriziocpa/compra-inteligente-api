@@ -1,15 +1,31 @@
-"""Conversions between interest-rate conventions.
+"""Conversión entre convenciones de tasas de interés (metodología del curso).
 
-All computations use ``Decimal`` exclusively. ``getcontext().prec`` is set to 28
-in ``src.shared.domain.__init__`` to give us enough precision for chained
-exponentiations.
+Todo el cálculo usa exclusivamente ``Decimal`` (``getcontext().prec = 28`` se
+fija en ``src.shared.domain.__init__``) para no perder precisión en las
+potencias encadenadas.
 
-Conventions follow the class material:
+Convenciones de la separata:
 
-* TEA (Tasa Efectiva Anual)
-* TEP (Tasa Efectiva por Periodo) — period of ``d`` days
-* TNA (Tasa Nominal Anual) capitalized ``m`` times per year
-* Year base defaults to 360 days (banking convention used in class).
+* TEA — Tasa Efectiva Anual.
+* TEP — Tasa Efectiva del Período de ``d`` días (TES si d=180, TEC si d=120,
+  TEM si d=30, etc.).
+* TNA — Tasa Nominal Anual capitalizable ``m`` veces al año.
+* Año bancario de 360 días y meses de 30 días.
+
+Procedimiento
+=============
+1. De TEA a TEP (equivalencia de tasas efectivas, proporción de días)::
+
+       TEP = (1 + TEA)^(d/360) - 1
+
+   Ej. de la separata: TEA 9% → TES (d=180) = 4.4030651 %.
+
+2. De TNA a TEA (la nominal se divide entre sus capitalizaciones y se
+   compone ``m`` veces)::
+
+       TEA = (1 + TNA/m)^m - 1
+
+3. De TNA a TEP: se compone TNA → TEA → TEP con las dos fórmulas anteriores.
 """
 
 from __future__ import annotations
@@ -18,7 +34,7 @@ from decimal import Decimal
 
 
 def _pow_decimal(base: Decimal, exponent: Decimal) -> Decimal:
-    """Power that supports a Decimal exponent by routing through ln/exp."""
+    """Potencia con exponente ``Decimal`` (vía ln/exp cuando no es entero)."""
     if exponent == Decimal(0):
         return Decimal(1)
     if exponent == exponent.to_integral_value():
@@ -54,6 +70,6 @@ def tep_from_tna_nominal(
     days_in_period: int,
     days_in_year: int = 360,
 ) -> Decimal:
-    """Compose TNA → TEA → TEP."""
+    """Composición TNA → TEA → TEP."""
     tea = tea_from_tna_nominal(tna, capitalizations_per_year)
     return tep_from_tea(tea, days_in_period, days_in_year)

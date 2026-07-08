@@ -9,9 +9,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class BaseORM(DeclarativeBase):
-    """Declarative base for all ORM models.
+    """Base declarativa de todos los modelos ORM.
 
-    Subclasses inherit ``id``, ``created_at`` and ``updated_at`` columns.
+    Las subclases heredan las columnas ``id``, ``created_at`` y ``updated_at``.
     """
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)

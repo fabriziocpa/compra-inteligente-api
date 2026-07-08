@@ -1,22 +1,25 @@
+"""Jerarquía de errores del dominio (se traducen a HTTP en api_errors)."""
+
+
 class DomainError(Exception):
-    """Base class for all domain-level errors."""
+    """Clase base de todos los errores de nivel de dominio."""
 
 
 class NotFoundError(DomainError):
-    """Raised when a requested aggregate is not found."""
+    """El agregado solicitado no existe."""
 
 
 class ValidationError(DomainError):
-    """Raised when input fails domain validation rules."""
+    """La entrada viola las reglas de validación del dominio."""
 
 
 class ConvergenceError(DomainError):
-    """Raised when an iterative numerical method fails to converge."""
+    """Un método numérico iterativo (p. ej. la TIR) no convergió."""
 
 
 class AuthenticationError(DomainError):
-    """Raised when credentials are invalid or absent."""
+    """Credenciales inválidas o ausentes."""
 
 
 class AuthorizationError(DomainError):
-    """Raised when an action is not permitted for the current principal."""
+    """La acción no está permitida para el usuario actual."""
