@@ -14,6 +14,10 @@ from src.contexts.loans.domain.value_objects.grace_period_policy import (
     GraceCode,
     GracePeriodPolicy,
 )
+from src.contexts.loans.domain.value_objects.initial_cost import (
+    InitialCost,
+    financed_total,
+)
 from src.contexts.loans.domain.value_objects.interest_rate_spec import (
     InterestRateSpec,
     RateKind,
@@ -28,6 +32,13 @@ class CreateLoanUseCase:
         self._repo = repo
 
     async def execute(self, cmd: CreateLoanCommand) -> Loan:
+        initial_costs = tuple(
+            InitialCost(name=c.name, amount=c.amount, financed=c.financed)
+            for c in cmd.initial_costs
+        )
+        # Con desglose, los financiados mandan; sin desglose se respeta el
+        # monto agregado (compatibilidad con clientes/préstamos antiguos).
+        financed = financed_total(initial_costs) if initial_costs else cmd.financed_costs
         terms = LoanTerms(
             currency=Currency(cmd.currency),
             vehicle_price=cmd.vehicle_price,
@@ -35,6 +46,8 @@ class CreateLoanUseCase:
             balloon_pct=cmd.balloon_pct,
             term_periods=cmd.term_periods,
             frequency_days=cmd.frequency_days,
+            financed_costs=financed,
+            desgravamen_monthly_pct=cmd.desgravamen_monthly_pct,
         )
         rate_spec = InterestRateSpec(
             days_in_period=cmd.frequency_days,
@@ -70,6 +83,7 @@ class CreateLoanUseCase:
             rate_spec=rate_spec,
             grace_policy=grace,
             additional_charges=charges,
+            initial_costs=initial_costs,
         )
         await self._repo.add(loan)
         return loan
