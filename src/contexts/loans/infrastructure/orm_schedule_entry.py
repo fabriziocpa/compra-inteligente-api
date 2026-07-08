@@ -26,6 +26,26 @@ class ScheduleEntryORM(BaseORM):
     payment: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     amortization: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     final_balance: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    # Desgravamen del período (negativo); en S está dentro de payment.
+    insurance: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), nullable=False, default=Decimal(0), server_default="0"
+    )
+    # Sub-cronograma del cuotón (0 sin cuota balón).
+    balloon_initial: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), nullable=False, default=Decimal(0), server_default="0"
+    )
+    balloon_interest: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), nullable=False, default=Decimal(0), server_default="0"
+    )
+    balloon_insurance: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), nullable=False, default=Decimal(0), server_default="0"
+    )
+    balloon_amortization: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), nullable=False, default=Decimal(0), server_default="0"
+    )
+    balloon_final: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), nullable=False, default=Decimal(0), server_default="0"
+    )
     # Cargos del período: [{name, kind, amount}] con montos negativos (egresos).
     charges: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
