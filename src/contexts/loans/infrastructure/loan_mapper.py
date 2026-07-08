@@ -17,6 +17,7 @@ from src.contexts.loans.domain.value_objects.grace_period_policy import (
     GraceCode,
     GracePeriodPolicy,
 )
+from src.contexts.loans.domain.value_objects.initial_cost import InitialCost
 from src.contexts.loans.domain.value_objects.interest_rate_spec import (
     InterestRateSpec,
     RateKind,
@@ -95,6 +96,18 @@ def charge_from_dict(payload: dict[str, Any]) -> AdditionalCharge:
     )
 
 
+def initial_cost_to_dict(c: InitialCost) -> dict[str, Any]:
+    return {"name": c.name, "amount": str(c.amount), "financed": c.financed}
+
+
+def initial_cost_from_dict(payload: dict[str, Any]) -> InitialCost:
+    return InitialCost(
+        name=payload["name"],
+        amount=Decimal(payload["amount"]),
+        financed=bool(payload.get("financed", True)),
+    )
+
+
 def loan_to_orm(loan: Loan, orm: LoanORM | None = None) -> LoanORM:
     if orm is None:
         orm = LoanORM()
@@ -109,9 +122,12 @@ def loan_to_orm(loan: Loan, orm: LoanORM | None = None) -> LoanORM:
     orm.balloon_pct = loan.terms.balloon_pct if loan.terms.balloon_pct > 0 else None
     orm.term_periods = loan.terms.term_periods
     orm.frequency_days = loan.terms.frequency_days
+    orm.financed_costs = loan.terms.financed_costs
+    orm.desgravamen_monthly_pct = loan.terms.desgravamen_monthly_pct
     orm.rate_spec = rate_spec_to_dict(loan.rate_spec)
     orm.grace_policy = grace_policy_to_dict(loan.grace_policy)
     orm.additional_charges = [charge_to_dict(c) for c in loan.additional_charges]
+    orm.initial_costs = [initial_cost_to_dict(c) for c in loan.initial_costs]
     orm.status = loan.status
 
     orm.schedule_entries = [
@@ -124,6 +140,12 @@ def loan_to_orm(loan: Loan, orm: LoanORM | None = None) -> LoanORM:
             payment=e.payment,
             amortization=e.amortization,
             final_balance=e.final_balance,
+            insurance=e.insurance,
+            balloon_initial=e.balloon_initial,
+            balloon_interest=e.balloon_interest,
+            balloon_insurance=e.balloon_insurance,
+            balloon_amortization=e.balloon_amortization,
+            balloon_final=e.balloon_final,
             charges=[
                 {"name": c.name, "kind": c.kind, "amount": str(c.amount)}
                 for c in e.charges
@@ -142,6 +164,8 @@ def loan_from_orm(orm: LoanORM) -> Loan:
         balloon_pct=orm.balloon_pct or Decimal(0),
         term_periods=orm.term_periods,
         frequency_days=orm.frequency_days,
+        financed_costs=orm.financed_costs or Decimal(0),
+        desgravamen_monthly_pct=orm.desgravamen_monthly_pct or Decimal(0),
     )
     schedule = tuple(
         PaymentScheduleEntry(
@@ -152,6 +176,12 @@ def loan_from_orm(orm: LoanORM) -> Loan:
             payment=e.payment,
             amortization=e.amortization,
             final_balance=e.final_balance,
+            insurance=e.insurance or Decimal(0),
+            balloon_initial=e.balloon_initial or Decimal(0),
+            balloon_interest=e.balloon_interest or Decimal(0),
+            balloon_insurance=e.balloon_insurance or Decimal(0),
+            balloon_amortization=e.balloon_amortization or Decimal(0),
+            balloon_final=e.balloon_final or Decimal(0),
             charges=tuple(
                 ChargeAmount(
                     name=c["name"], kind=c["kind"], amount=Decimal(c["amount"])
@@ -171,6 +201,9 @@ def loan_from_orm(orm: LoanORM) -> Loan:
         rate_spec=rate_spec_from_dict(orm.rate_spec),
         grace_policy=grace_policy_from_dict(orm.grace_policy),
         additional_charges=tuple(charge_from_dict(c) for c in orm.additional_charges),
+        initial_costs=tuple(
+            initial_cost_from_dict(c) for c in (orm.initial_costs or [])
+        ),
         status=cast(LoanStatus, orm.status),
         schedule=schedule,
     )

@@ -4,8 +4,10 @@ El flujo de caja se arma desde el punto de vista del deudor con el cronograma
 YA calculado (incluidos sus cargos por período), de modo que los indicadores
 siempre coinciden con el plan que se le muestra al cliente:
 
-* t = 0: desembolso neto recibido, MF = precio − cuota inicial (positivo).
-* t = 1..n: cuota total del período (cuota del plan + cargos), negativa.
+* t = 0: el monto del préstamo (positivo): precio − cuota inicial + costes
+  financiados (celda ``Prestamo`` de la hoja Interbank).
+* t = 1..n(+1): cuota total del período (cuota del plan + cargos + desgravamen
+  pagado aparte en gracia + cuotón en N+1), negativa.
 """
 
 from __future__ import annotations
@@ -38,9 +40,7 @@ class CalculateIndicatorsUseCase:
         if not loan.schedule:
             raise DomainError("Loan has no schedule. Run /schedule first.")
 
-        disbursement = loan.terms.vehicle_price * (
-            Decimal(1) - loan.terms.initial_payment_pct
-        )
+        disbursement = loan.terms.loan_principal
 
         # total_payment ya incluye los cargos del período (con signo negativo).
         cashflows: list[Decimal] = [disbursement]

@@ -4,9 +4,12 @@ Procedimiento
 =============
 El flujo de caja del deudor se arma así:
 
-* ``cashflows[0]``: el desembolso neto RECIBIDO (positivo) = MF = precio − CI.
+* ``cashflows[0]``: el monto del préstamo RECIBIDO (positivo). En la variante
+  Interbank es ``Prestamo = PV − CI + costes iniciales financiados``.
 * ``cashflows[t>0]``: el egreso total del período (negativo) = cuota del plan
-  más cargos adicionales (seguros, comisiones, portes).
+  más cargos adicionales (seguros, comisiones, portes). Con cuota balón el
+  flujo llega hasta el período N+1, donde se paga el cuotón (= CF) más los
+  cargos de ese período.
 
 Indicadores:
 

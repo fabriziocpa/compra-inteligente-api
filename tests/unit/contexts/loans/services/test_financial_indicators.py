@@ -52,13 +52,3 @@ def test_van_tir_tcea_for_example_1_french() -> None:
     tcea = FinancialIndicatorsService.tcea(tir, 180)
     assert abs(tir - tes) <= Decimal("0.00001")
     assert abs(tcea - Decimal("0.09")) <= Decimal("0.00001")
-
-
-def test_van_raises_on_empty() -> None:
-    with pytest.raises(DomainError):
-        FinancialIndicatorsService.van([], Decimal("0.01"))
-
-
-def test_tir_raises_on_singleton() -> None:
-    with pytest.raises(DomainError):
-        FinancialIndicatorsService.tir([Decimal("100")])

@@ -3,9 +3,12 @@
 Procedimiento de evaluación por período: cada cargo define una *base* y un
 *valor*; el importe del período se obtiene así:
 
-* ``fixed``:       importe = valor (monto fijo en la moneda del préstamo).
-* ``balance_pct``: importe = saldo inicial del período × valor (tasa 0..1).
-* ``payment_pct``: importe = |cuota del período| × valor (tasa 0..1).
+* ``fixed``:             importe = valor (monto fijo en la moneda del préstamo).
+* ``balance_pct``:       importe = saldo inicial del período × valor (tasa 0..1).
+* ``payment_pct``:       importe = |cuota del período| × valor (tasa 0..1).
+* ``vehicle_pct_annual``: importe = precio del vehículo × valor (tasa ANUAL
+  0..1) / cuotas por año. Es el «Seguro riesgo» de la hoja Interbank:
+  ``SegRiePer = pSegRie × PV / NCxA`` con ``NCxA = 360/frec``.
 
 El rango ``applies_from_period .. applies_to_period`` acota en qué períodos
 se cobra (``None`` = hasta el final). Estos importes se suman a la cuota para
@@ -20,7 +23,7 @@ from decimal import Decimal
 from typing import Literal
 
 ChargeKind = Literal["seguro", "comision", "portes", "otro"]
-ChargeBasis = Literal["fixed", "balance_pct", "payment_pct"]
+ChargeBasis = Literal["fixed", "balance_pct", "payment_pct", "vehicle_pct_annual"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +43,14 @@ class AdditionalCharge:
             return False
         return True
 
-    def amount_for(self, period: int, initial_balance: Decimal, payment: Decimal) -> Decimal:
+    def amount_for(
+        self,
+        period: int,
+        initial_balance: Decimal,
+        payment: Decimal,
+        vehicle_price: Decimal = Decimal(0),
+        frequency_days: int = 30,
+    ) -> Decimal:
         """Importe (positivo) del cargo en el período, según su base."""
         if not self.applies_in(period):
             return Decimal(0)
@@ -50,4 +60,6 @@ class AdditionalCharge:
             return initial_balance * self.value
         if self.basis == "payment_pct":
             return abs(payment) * self.value
+        if self.basis == "vehicle_pct_annual":
+            return vehicle_price * self.value * Decimal(frequency_days) / Decimal(360)
         raise ValueError(f"Unknown basis: {self.basis}")

@@ -2,11 +2,14 @@
 
 Procedimiento:
 1. Resuelve cada período (TEP del tramo vigente + tipo de gracia).
-2. Construye el plan con el motor francés o el de Compra Inteligente
-   (si hay cuota balón).
+2. Construye el plan con el motor Interbank de Compra Inteligente cuando hay
+   cuota balón, desgravamen o costes financiados (todos parte de ese modelo);
+   con el francés puro en caso contrario.
 3. Evalúa los cargos adicionales de cada período (seguro/comisión/portes)
-   sobre el saldo y la cuota calculados, y los guarda junto a la fila para
-   que el cronograma muestre la cuota total (norma de transparencia).
+   sobre el saldo, la cuota o el precio del vehículo, y los guarda junto a la
+   fila para que el cronograma muestre la cuota total (norma de transparencia).
+   Con balón, los cargos también se cobran en el período N+1 (columna
+   ``IF(NC<=N+1, …)`` de la hoja).
 """
 
 from __future__ import annotations
@@ -44,12 +47,19 @@ class CalculateScheduleUseCase:
             for i in range(1, loan.terms.term_periods + 1)
         ]
 
-        if loan.terms.is_compra_inteligente:
+        uses_interbank_model = (
+            loan.terms.is_compra_inteligente
+            or loan.terms.desgravamen_monthly_pct > Decimal(0)
+            or loan.terms.financed_costs > Decimal(0)
+        )
+        if uses_interbank_model:
             sched = CompraInteligenteService.build_schedule(
                 vehicle_price=loan.terms.vehicle_price,
                 initial_payment_pct=loan.terms.initial_payment_pct,
                 balloon_pct=loan.terms.balloon_pct,
                 periods=period_inputs,
+                financed_costs=loan.terms.financed_costs,
+                desgravamen_pct_per_period=loan.terms.desgravamen_pct_per_period,
             )
             rows = sched.rows
         else:
@@ -67,6 +77,8 @@ class CalculateScheduleUseCase:
                         period=r.period,
                         initial_balance=r.initial_balance,
                         payment=r.payment,
+                        vehicle_price=loan.terms.vehicle_price,
+                        frequency_days=loan.terms.frequency_days,
                     ),
                 )
                 for c in loan.additional_charges
@@ -82,6 +94,12 @@ class CalculateScheduleUseCase:
                     amortization=r.amortization,
                     final_balance=r.final_balance,
                     charges=charges,
+                    insurance=r.insurance,
+                    balloon_initial=r.balloon_initial,
+                    balloon_interest=r.balloon_interest,
+                    balloon_insurance=r.balloon_insurance,
+                    balloon_amortization=r.balloon_amortization,
+                    balloon_final=r.balloon_final,
                 )
             )
         loan.set_schedule(entries)
